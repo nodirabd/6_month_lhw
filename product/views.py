@@ -71,7 +71,7 @@ class ProductListCreateAPIView(ListCreateAPIView):
     permission_classes = [IsModerator]
 
     def post(self, request, *args, **kwargs):
-        serializer = ProductValidateSerializer(data=request.data)
+        serializer = ProductValidateSerializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
 
         title = serializer.validated_data.get('title')
@@ -97,7 +97,7 @@ class ProductDetailAPIView(RetrieveUpdateDestroyAPIView):
 
     def put(self, request, *args, **kwargs):
         product = self.get_object()
-        serializer = ProductValidateSerializer(data=request.data)
+        serializer = ProductValidateSerializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
 
         product.title = serializer.validated_data.get('title')

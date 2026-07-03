@@ -9,7 +9,7 @@ from .views import (
 )
 
 urlpatterns = [
-    path('', ProductListCreateAPIView.as_view()),
+    path('', ProductListCreateAPIView.as_view(), name='product-list-create'),
     path('<int:id>/', ProductDetailAPIView.as_view()),
     path('categories/', CategoryListCreateAPIView.as_view()),
     path('categories/<int:id>/', CategoryDetailAPIView.as_view()),

@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
+from datetime import timedelta
 import os
 from pathlib import Path
 
@@ -44,6 +45,8 @@ INSTALLED_APPS = [
     "users",
     "rest_framework.authtoken",
     "drf_yasg",
+    'rest_framework_simplejwt',
+    'rest_framework_simplejwt.token_blacklist',
 ]
 
 MIDDLEWARE = [
@@ -60,6 +63,7 @@ MIDDLEWARE = [
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "rest_framework.authentication.TokenAuthentication",
+        "rest_framework_simplejwt.authentication.JWTAuthentication",
         "rest_framework.authentication.SessionAuthentication",
     ],
 }
@@ -165,4 +169,21 @@ SWAGGER_SETTINGS = {
          {        "AuthToken": 
           {"type": "apiKey", 
            "name": "Authorization", 
-           "in": "header"}    }}
+           "in": "header",},
+               'JWT': {
+                   "type": "apiKey",
+                   "name": "Authorization",
+                   "in": "header"
+               }
+           }
+        
+        }
+SIMPLE_JWT = {    
+    "ACCESS_TOKEN_LIFETIME": 
+    timedelta(minutes=180),
+    "REFRESH_TOKEN_LIFETIME":
+      timedelta(days=1),   
+        "ROTATE_REFRESH_TOKENS": True, 
+       "BLACKLIST_AFTER_ROTATION": True,   
+         "UPDATE_LAST_LOGIN": False,
+            "TOKEN_OBTAIN_SERIALIZER": "users.serializers.CustomTokenObtainPairSerializer",}

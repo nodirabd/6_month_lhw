@@ -20,6 +20,7 @@ class AuthorizationAPIView(CreateAPIView):
     serializer_class = AuthValidateSerializer
 
     def post(self, request):
+        print(request.auth.get("email"))
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         user = serializer.validated_data.get("user")
@@ -42,10 +43,7 @@ class RegistrationAPIView(CreateAPIView):
         serializer.is_valid(raise_exception=True)
 
         with transaction.atomic():
-            user_data = serializer.validated_data
-            
-            user = CustomUser.objects.create_user(
-                is_active=False,  )
+            user = serializer.save(is_active=False)
 
             code = "".join(random.choices(string.digits, k=8))
 
