@@ -5,6 +5,10 @@ from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 from .models import ConfirmationCode, CustomUser
 
+class OAuthCodeSeroializer(serializers.Serializer):
+    code = serializers.CharField()
+    registration_source = serializers.ChoiceField(choices=["google", "facebook", "vk"])
+
 
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
     @classmethod
