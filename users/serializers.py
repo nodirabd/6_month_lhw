@@ -5,9 +5,13 @@ from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 from .models import ConfirmationCode, CustomUser
 
-class OAuthCodeSeroializer(serializers.Serializer):
+class OAuthCodeSerializer(serializers.Serializer):
     code = serializers.CharField()
-    registration_source = serializers.ChoiceField(choices=["google", "facebook", "vk"])
+    registration_source = serializers.ChoiceField(
+        choices=["google", "local", "facebook"],
+        required=False,
+        default="google",
+    )
 
 
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
@@ -62,6 +66,7 @@ class RegisterValidateSerializer(serializers.ModelSerializer):
         return email
 
     def create(self, validated_data):
+        validated_data.setdefault("registration_source", "local")
         return CustomUser.objects.create_user(**validated_data)
 
 

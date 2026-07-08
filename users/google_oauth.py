@@ -1,6 +1,7 @@
 import os
 
 import requests
+from django.utils import timezone
 from rest_framework.generics import CreateAPIView
 from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -40,13 +41,27 @@ class GoogleLoginAPIView(CreateAPIView):
             headers={"Authorization": f"Bearer {access_token}"},
         ).json()
 
-        print("user_info", user_info)
-
         email = user_info["email"]
+        first_name = user_info.get("given_name", "")
+        last_name = user_info.get("family_name", "")
+        registration_source = serializer.validated_data.get("registration_source", "google")
 
         user, created = CustomUser.objects.get_or_create(
             email=email,
+            defaults={
+                "first_name": first_name,
+                "last_name": last_name,
+                "registration_source": registration_source,
+                "is_active": True,
+            },
         )
+
+        user.first_name = first_name or user.first_name
+        user.last_name = last_name or user.last_name
+        user.registration_source = registration_source
+        user.is_active = True
+        user.last_login = timezone.now()
+        user.save()
 
         refresh = RefreshToken.for_user(user)
         refresh["email"] = user.email
