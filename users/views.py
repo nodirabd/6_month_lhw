@@ -2,13 +2,14 @@ import random
 import string
 
 from django.contrib.auth import authenticate
+from django.core.cache import cache  
 from django.db import transaction
 from rest_framework import status
 from rest_framework.authtoken.models import Token
 from rest_framework.generics import CreateAPIView
 from rest_framework.response import Response
 
-from .models import ConfirmationCode, CustomUser
+from .models import CustomUser  
 from .serializers import (
     AuthValidateSerializer,
     ConfirmationSerializer,
@@ -47,7 +48,7 @@ class RegistrationAPIView(CreateAPIView):
 
             code = "".join(random.choices(string.digits, k=8))
 
-            ConfirmationCode.objects.create(user=user, code=code)
+            cache.set(f"code{user.id}", code, timeout=300)
 
         return Response(
             status=status.HTTP_201_CREATED,
@@ -63,6 +64,14 @@ class ConfirmUserAPIView(CreateAPIView):
         serializer.is_valid(raise_exception=True)
 
         user_id = serializer.validated_data["user_id"]
+        user_code = serializer.validated_data.get("code")  
+        cached_code = cache.get(f"code{user_id}")
+
+        if not cached_code or cached_code != str(user_code):
+            return Response(
+                status=status.HTTP_400_BAD_REQUEST,
+                data={"error": "wrong confirmation code or code has expired!!!!!!!!!!!!"},
+            )
 
         with transaction.atomic():
             user = CustomUser.objects.get(id=user_id)
@@ -70,10 +79,9 @@ class ConfirmUserAPIView(CreateAPIView):
             user.save()
 
             token, _ = Token.objects.get_or_create(user=user)
-
-            ConfirmationCode.objects.filter(user=user).delete()
+            cache.delete(f"code{user_id}")
 
         return Response(
             status=status.HTTP_200_OK,
-            data={"message": "Аккаунт успешно активирован", "key": token.key},
+            data={"message": "account successfully activated", "key": token.key},
         )
