@@ -1,87 +1,177 @@
-import random
-import string
-
-from django.contrib.auth import authenticate
-from django.core.cache import cache  
+from collections import OrderedDict
 from django.db import transaction
-from rest_framework import status
-from rest_framework.authtoken.models import Token
-from rest_framework.generics import CreateAPIView
 from rest_framework.response import Response
-
-from .models import CustomUser  
+from rest_framework import status
+from rest_framework.generics import ListCreateAPIView, RetrieveUpdateDestroyAPIView
+from rest_framework.pagination import PageNumberPagination
+from rest_framework.viewsets import ModelViewSet
+from rest_framework.views import APIView
+from common.permissions import IsModerator
+from .models import Category, Product, Review
 from .serializers import (
-    AuthValidateSerializer,
-    ConfirmationSerializer,
-    RegisterValidateSerializer,
+    CategorySerializer,
+    ProductSerializer,
+    ReviewSerializer,
+    ProductWithReviewsSerializer,
+    CategoryValidateSerializer,
+    ProductValidateSerializer,
+    ReviewValidateSerializer
 )
+from django.core.cache import cache
+from .tasks import (
+    notify_product_created,
+    send_new_product_email,
+    notify_review_added,
+    send_new_category_email,
+)
+PAGE_SIZE = 5
 
 
-class AuthorizationAPIView(CreateAPIView):
-    serializer_class = AuthValidateSerializer
+class CustomPagination(PageNumberPagination):
+    def get_paginated_response(self, data):
+        return Response(OrderedDict([
+            ('total', self.page.paginator.count),
+            ('next', self.get_next_link()),
+            ('previous', self.get_previous_link()),
+            ('results', data)
+        ]))
 
-    def post(self, request):
-        print(request.auth.get("email"))
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        user = serializer.validated_data.get("user")
-
-        if user:
-            token, _ = Token.objects.get_or_create(user=user)
-            return Response(data={"key": token.key}, status=status.HTTP_200_OK)
-
-        return Response(
-            status=status.HTTP_401_UNAUTHORIZED,
-            data={"error": "User credentials are wrong!"},
-        )
+    def get_page_size(self, request):
+        return PAGE_SIZE
 
 
-class RegistrationAPIView(CreateAPIView):
-    serializer_class = RegisterValidateSerializer
+class CategoryListCreateAPIView(ListCreateAPIView):
+    queryset = Category.objects.all()
+    serializer_class = CategorySerializer
+    pagination_class = CustomPagination
 
     def post(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data)
+        serializer = CategoryValidateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        with transaction.atomic():
-            user = serializer.save(is_active=False)
+        category = Category.objects.create(**serializer.validated_data)
 
-            code = "".join(random.choices(string.digits, k=8))
+        send_new_category_email.delay(category.name)
 
-            cache.set(f"code{user.id}", code, timeout=300)
-
-        return Response(
-            status=status.HTTP_201_CREATED,
-            data={"user_id": user.id, "confirmation_code": code},
-        )
+        return Response(data=CategorySerializer(category).data,
+                        status=status.HTTP_201_CREATED)
 
 
-class ConfirmUserAPIView(CreateAPIView):
-    serializer_class = ConfirmationSerializer
+class CategoryDetailAPIView(RetrieveUpdateDestroyAPIView):
+    queryset = Category.objects.all()
+    serializer_class = CategorySerializer
+    lookup_field = 'id'
 
-    def post(self, request):
-        serializer = self.get_serializer(data=request.data)
+    def put(self, request, *args, **kwargs):
+        instance = self.get_object()
+        serializer = CategoryValidateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        user_id = serializer.validated_data["user_id"]
-        user_code = serializer.validated_data.get("code")  
-        cached_code = cache.get(f"code{user_id}")
+        instance.name = serializer.validated_data.get('name')
+        instance.save()
 
-        if not cached_code or cached_code != str(user_code):
-            return Response(
-                status=status.HTTP_400_BAD_REQUEST,
-                data={"error": "wrong confirmation code or code has expired!!!!!!!!!!!!"},
-            )
+        return Response(data=CategorySerializer(instance).data)
 
-        with transaction.atomic():
-            user = CustomUser.objects.get(id=user_id)
-            user.is_active = True
-            user.save()
 
-            token, _ = Token.objects.get_or_create(user=user)
-            cache.delete(f"code{user_id}")
+class ProductListCreateAPIView(ListCreateAPIView):
+    queryset = Product.objects.select_related('category').all()
+    serializer_class = ProductSerializer
+    pagination_class = CustomPagination
+    permission_classes = [IsModerator]
 
-        return Response(
-            status=status.HTTP_200_OK,
-            data={"message": "account successfully activated", "key": token.key},
+    def post(self, request, *args, **kwargs):
+        serializer = ProductValidateSerializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+
+        title = serializer.validated_data.get('title')
+        description = serializer.validated_data.get('description')
+        price = serializer.validated_data.get('price')
+        category = serializer.validated_data.get('category')
+
+        product = Product.objects.create(
+            title=title,
+            description=description,
+            price=price,
+            category=category
         )
+
+        notify_product_created.delay(product.title)
+        send_new_product_email.delay(product.title, str(product.price))
+
+        return Response(data=ProductSerializer(product).data,
+                        status=status.HTTP_201_CREATED)
+    def get(self, request, *args, **kwargs):
+        cached_data = cache.get("product_list")
+        if cached_data:
+            print("redis data")
+            return Response(data=cached_data, status=status.HTTP_200_OK)
+        response = super().get(self, request, *args, **kwargs)
+        print("Postgres data")
+        if response.data.get("total", 0) > 0:
+            cache.set("product_list", response.data, timeout=300)
+        return response
+class ProductDetailAPIView(RetrieveUpdateDestroyAPIView):
+    queryset = Product.objects.select_related('category').all()
+    serializer_class = ProductSerializer
+    lookup_field = 'id'
+    permission_classes = [IsModerator]
+
+    def put(self, request, *args, **kwargs):
+        product = self.get_object()
+        serializer = ProductValidateSerializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+
+        product.title = serializer.validated_data.get('title')
+        product.description = serializer.validated_data.get('description')
+        product.price = serializer.validated_data.get('price')
+        product.category = serializer.validated_data.get('category')
+        product.save()
+
+        return Response(data=ProductSerializer(product).data)
+
+
+class ReviewViewSet(ModelViewSet):
+    queryset = Review.objects.all()
+    serializer_class = ReviewSerializer
+    pagination_class = CustomPagination
+    lookup_field = 'id'
+
+    def create(self, request, *args, **kwargs):
+        serializer = ReviewValidateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        text = serializer.validated_data.get('text')
+        stars = serializer.validated_data.get('stars')
+        product = serializer.validated_data.get('product')
+        review = Review.objects.create(
+            text=text,
+            stars=stars,
+            product=product
+        )
+
+        notify_review_added.delay(review.product.title, review.stars)
+
+        return Response(data=ReviewSerializer(review).data,
+                        status=status.HTTP_201_CREATED)
+
+    def update(self, request, *args, **kwargs):
+        review = self.get_object()
+        serializer = ReviewValidateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        review.text = serializer.validated_data.get('text')
+        review.stars = serializer.validated_data.get('stars')
+        review.product = serializer.validated_data.get('product')
+        review.save()
+
+        return Response(data=ReviewSerializer(review).data)
+
+
+class ProductWithReviewsAPIView(APIView):
+    def get(self, request):
+        paginator = CustomPagination()
+        products = Product.objects.select_related('category').prefetch_related('reviews').all()
+        result_page = paginator.paginate_queryset(products, request)
+
+        serializer = ProductWithReviewsSerializer(result_page, many=True)
+        return paginator.get_paginated_response(serializer.data)
